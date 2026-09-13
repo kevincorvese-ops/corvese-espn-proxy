@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: corvese-espn-proxy
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: ESPN_S2
+        sync: false
+      - key: ESPN_SWID
+        sync: false
+      - key: DASHBOARD_ORIGIN
+        sync: false
+      - key: ALLOWED_LEAGUE_IDS
+        sync: false
