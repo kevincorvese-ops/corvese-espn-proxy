@@ -1,4 +1,4 @@
-// Corvese Degen Command Center — secure ESPN/FanDuel helper proxy v6.
+// Corvese Degen Command Center — secure ESPN/FanDuel helper proxy v7.
 // Required env vars for private ESPN fantasy leagues: ESPN_S2, ESPN_SWID
 // Optional env vars: DASHBOARD_ORIGIN, ALLOWED_LEAGUE_IDS
 
@@ -6,6 +6,9 @@ const express = require('express');
 const cors = require('cors');
 
 const app = express();
+
+app.use(express.json({ limit: '12mb' }));
+
 const PORT = process.env.PORT || 10000;
 
 const normalizeOrigin = value =>
@@ -29,32 +32,36 @@ app.use(cors({
 }));
 
 
-// --------------------------------------------------
+// ==================================================
 // STATUS
-// --------------------------------------------------
+// ==================================================
 
-app.get('/', (_req, res) => res.json({
-  ok: true,
-  version: 6,
-  service: 'Corvese Degen Command Center Proxy',
-  endpoints: [
-    '/api/espn',
-    '/api/nfl/scoreboard',
-    '/api/fanduel'
-  ]
-}));
+app.get('/', (_req, res) =>
+  res.json({
+    ok: true,
+    version: 7,
+    service: 'Corvese Degen Command Center Proxy',
+    endpoints: [
+      '/api/espn',
+      '/api/nfl/scoreboard',
+      '/api/fanduel',
+      '/api/bet/recognize',
+      '/api/bets'
+    ]
+  })
+);
 
 app.get('/health', (_req, res) =>
   res.json({
     ok: true,
-    version: 6
+    version: 7
   })
 );
 
 
-// --------------------------------------------------
+// ==================================================
 // ESPN FANTASY
-// --------------------------------------------------
+// ==================================================
 
 function allowedLeague(leagueId) {
   const allowed =
@@ -72,10 +79,7 @@ function allowedLeague(leagueId) {
 async function espnGet(baseUrl, params) {
   const qs = new URLSearchParams();
 
-  for (
-    const [k, value]
-    of Object.entries(params || {})
-  ) {
+  for (const [k, value] of Object.entries(params || {})) {
     if (Array.isArray(value)) {
       value.forEach(v =>
         qs.append(k, String(v))
@@ -100,7 +104,7 @@ async function espnGet(baseUrl, params) {
           'application/json, text/plain, */*',
 
         'User-Agent':
-          'Mozilla/5.0 Corvese-Degen-Command-Center/1.6'
+          'Mozilla/5.0 Corvese-Degen-Command-Center/1.7'
       }
     }
   );
@@ -126,608 +130,1071 @@ async function espnGet(baseUrl, params) {
   }
 }
 
-app.get(
-  '/api/espn',
-  async (req, res) => {
 
-    const {
-      leagueId,
-      season = '2026'
-    } = req.query;
+app.get('/api/espn', async (req, res) => {
+  const {
+    leagueId,
+    season = '2026'
+  } = req.query;
 
-    if (
-      !leagueId ||
-      !/^\d+$/.test(String(leagueId))
-    ) {
-      return res
-        .status(400)
-        .json({
-          error:
-            'Valid numeric leagueId required'
-        });
-    }
+  if (
+    !leagueId ||
+    !/^\d+$/.test(String(leagueId))
+  ) {
+    return res
+      .status(400)
+      .json({
+        error:
+          'Valid numeric leagueId required'
+      });
+  }
 
-    if (
-      !/^\d{4}$/.test(String(season))
-    ) {
-      return res
-        .status(400)
-        .json({
-          error:
-            'Valid four-digit season required'
-        });
-    }
+  if (
+    !/^\d{4}$/.test(String(season))
+  ) {
+    return res
+      .status(400)
+      .json({
+        error:
+          'Valid four-digit season required'
+      });
+  }
 
-    if (!allowedLeague(leagueId)) {
-      return res
-        .status(403)
-        .json({
-          error:
-            'League not allowed by proxy configuration'
-        });
-    }
+  if (!allowedLeague(leagueId)) {
+    return res
+      .status(403)
+      .json({
+        error:
+          'League not allowed by proxy configuration'
+      });
+  }
 
-    if (
-      !process.env.ESPN_S2 ||
-      !process.env.ESPN_SWID
-    ) {
-      return res
-        .status(500)
-        .json({
-          error:
-            'ESPN credentials not configured on server'
-        });
-    }
+  if (
+    !process.env.ESPN_S2 ||
+    !process.env.ESPN_SWID
+  ) {
+    return res
+      .status(500)
+      .json({
+        error:
+          'ESPN credentials not configured on server'
+      });
+  }
 
-    const base =
-      `https://lm-api-reads.fantasy.espn.com` +
-      `/apis/v3/games/ffl` +
-      `/seasons/${season}` +
-      `/segments/0/leagues/${leagueId}`;
+  const base =
+    `https://lm-api-reads.fantasy.espn.com` +
+    `/apis/v3/games/ffl` +
+    `/seasons/${season}` +
+    `/segments/0/leagues/${leagueId}`;
 
-    try {
+  try {
 
-      const league =
-        await espnGet(
-          base,
-          {
-            view: [
-              'mTeam',
-              'mStatus',
-              'mScoreboard'
-            ]
-          }
-        );
+    const league =
+      await espnGet(
+        base,
+        {
+          view: [
+            'mTeam',
+            'mStatus',
+            'mScoreboard'
+          ]
+        }
+      );
 
-      const scoringPeriodId =
-        Number(
-          league.scoringPeriodId ??
-          league.status
-            ?.currentScoringPeriod ??
-          league.status
-            ?.currentScoringPeriodId ??
-          league.status
-            ?.latestScoringPeriod
-        ) || undefined;
+    const scoringPeriodId =
+      Number(
+        league.scoringPeriodId ??
+        league.status?.currentScoringPeriod ??
+        league.status?.currentScoringPeriodId ??
+        league.status?.latestScoringPeriod
+      ) || undefined;
 
-      const matchupPeriodId =
-        Number(
-          league.status
-            ?.currentMatchupPeriod ??
-          league.status
-            ?.currentMatchupPeriodId ??
-          scoringPeriodId
-        ) || undefined;
+    const matchupPeriodId =
+      Number(
+        league.status?.currentMatchupPeriod ??
+        league.status?.currentMatchupPeriodId ??
+        scoringPeriodId
+      ) || undefined;
 
-      const matchup =
-        await espnGet(
-          base,
-          {
-            view: [
-              'mTeam',
-              'mRoster',
-              'mLiveScoring',
-              'mMatchup',
-              'mMatchupScore',
-              'mScoreboard',
-              'mBoxscore',
-              'proTeamSchedules_wl'
-            ],
+    const matchup =
+      await espnGet(
+        base,
+        {
+          view: [
+            'mTeam',
+            'mRoster',
+            'mLiveScoring',
+            'mMatchup',
+            'mMatchupScore',
+            'mScoreboard',
+            'mBoxscore',
+            'proTeamSchedules_wl'
+          ],
 
-            scoringPeriodId,
-            matchupPeriodId
-          }
-        );
-
-      const merged = {
-        ...league,
-        ...matchup,
-
-        teams:
-          Array.isArray(matchup.teams) &&
-          matchup.teams.length
-            ? matchup.teams
-            : league.teams,
-
-        schedule:
-          Array.isArray(matchup.schedule)
-            ? matchup.schedule
-            : league.schedule,
-
-        scoringPeriodId:
-          matchup.scoringPeriodId ??
-          league.scoringPeriodId ??
-          scoringPeriodId,
-
-        status: {
-          ...(league.status || {}),
-          ...(matchup.status || {})
-        },
-
-        _dcc: {
-          version: 6,
           scoringPeriodId,
           matchupPeriodId
         }
-      };
-
-      res.set(
-        'Cache-Control',
-        'no-store'
       );
 
-      return res.json(merged);
+    const merged = {
+      ...league,
+      ...matchup,
 
-    } catch (error) {
+      teams:
+        Array.isArray(matchup.teams) &&
+        matchup.teams.length
+          ? matchup.teams
+          : league.teams,
 
-      console.error(
-        'ESPN fantasy upstream request failed:',
-        error
-      );
+      schedule:
+        Array.isArray(matchup.schedule)
+          ? matchup.schedule
+          : league.schedule,
 
-      return res
-        .status(error.status || 502)
-        .json({
-          error:
-            error.message ||
-            'ESPN upstream request failed'
-        });
-    }
+      scoringPeriodId:
+        matchup.scoringPeriodId ??
+        league.scoringPeriodId ??
+        scoringPeriodId,
+
+      status: {
+        ...(league.status || {}),
+        ...(matchup.status || {})
+      },
+
+      _dcc: {
+        version: 7,
+        scoringPeriodId,
+        matchupPeriodId
+      }
+    };
+
+    res.set(
+      'Cache-Control',
+      'no-store'
+    );
+
+    return res.json(merged);
+
+  } catch (error) {
+
+    console.error(
+      'ESPN fantasy upstream request failed:',
+      error
+    );
+
+    return res
+      .status(error.status || 502)
+      .json({
+        error:
+          error.message ||
+          'ESPN upstream request failed'
+      });
   }
-);
+});
 
 
-// --------------------------------------------------
+// ==================================================
 // NFL LIVE SCOREBOARD
 //
-// Used to connect imported FanDuel bets to
-// live NFL games.
-// --------------------------------------------------
+// Used to connect imported FanDuel bets to live games.
+// ==================================================
 
-app.get(
-  '/api/nfl/scoreboard',
-  async (req, res) => {
+app.get('/api/nfl/scoreboard', async (req, res) => {
 
-    try {
+  try {
 
-      const from =
-        String(
-          req.query.from || ''
-        ).trim();
+    const from =
+      String(
+        req.query.from || ''
+      ).trim();
 
-      const to =
-        String(
-          req.query.to || ''
-        ).trim();
+    const to =
+      String(
+        req.query.to || ''
+      ).trim();
 
-      const valid =
-        value =>
-          /^\d{8}$/.test(value);
+    const valid =
+      v => /^\d{8}$/.test(v);
 
-      if (
-        (from && !valid(from)) ||
-        (to && !valid(to))
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              'Dates must be YYYYMMDD.'
-          });
-      }
-
-      const dates =
-        from && to
-          ? `${from}-${to}`
-          : (from || to || '');
-
-      const qs =
-        new URLSearchParams({
-          limit: '200'
+    if (
+      (from && !valid(from)) ||
+      (to && !valid(to))
+    ) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'Dates must be YYYYMMDD.'
         });
+    }
 
-      if (dates) {
-        qs.set(
-          'dates',
-          dates
-        );
-      }
+    const dates =
+      from && to
+        ? `${from}-${to}`
+        : (from || to || '');
 
-      const url =
-        `https://site.api.espn.com` +
-        `/apis/site/v2/sports/football/nfl/scoreboard` +
-        `?${qs.toString()}`;
+    const qs =
+      new URLSearchParams({
+        limit: '200'
+      });
 
-      const upstream =
-        await fetch(
-          url,
-          {
-            headers: {
-              Accept:
-                'application/json',
+    if (dates) {
+      qs.set(
+        'dates',
+        dates
+      );
+    }
 
-              'User-Agent':
-                'Mozilla/5.0 Corvese-Degen-Command-Center/1.6'
-            }
+    const url =
+      `https://site.api.espn.com` +
+      `/apis/site/v2/sports/football/nfl/scoreboard` +
+      `?${qs.toString()}`;
+
+    const upstream =
+      await fetch(
+        url,
+        {
+          headers: {
+            Accept:
+              'application/json',
+
+            'User-Agent':
+              'Mozilla/5.0 Corvese-Degen-Command-Center/1.7'
           }
-        );
+        }
+      );
 
-      const data =
-        await upstream.json();
+    const data =
+      await upstream.json();
 
-      if (!upstream.ok) {
-        return res
-          .status(upstream.status)
-          .json({
-            error:
-              'NFL scoreboard request failed.'
-          });
-      }
+    if (!upstream.ok) {
+      return res
+        .status(upstream.status)
+        .json({
+          error:
+            'NFL scoreboard request failed.'
+        });
+    }
 
-      const events =
-        (data.events || [])
-          .map(event => {
+    const events =
+      (data.events || [])
+        .map(event => {
 
-            const competition =
-              event.competitions?.[0] || {};
+          const c =
+            event.competitions?.[0] || {};
 
-            const competitors =
-              competition.competitors || [];
+          const comps =
+            c.competitors || [];
 
-            const home =
-              competitors.find(
-                x =>
-                  x.homeAway === 'home'
-              ) || {};
+          const home =
+            comps.find(
+              x => x.homeAway === 'home'
+            ) || {};
 
-            const away =
-              competitors.find(
-                x =>
-                  x.homeAway === 'away'
-              ) || {};
+          const away =
+            comps.find(
+              x => x.homeAway === 'away'
+            ) || {};
 
-            const status =
-              competition.status ||
-              event.status ||
-              {};
+          const st =
+            c.status ||
+            event.status ||
+            {};
 
-            const statusType =
-              status.type || {};
+          const statusType =
+            st.type || {};
 
-            const team =
-              competitor => ({
-                id:
-                  String(
-                    competitor.team?.id ||
-                    ''
-                  ),
-
-                name:
-                  competitor.team
-                    ?.displayName ||
-                  competitor.team
-                    ?.shortDisplayName ||
-                  competitor.team
-                    ?.name ||
-                  '',
-
-                shortName:
-                  competitor.team
-                    ?.shortDisplayName ||
-                  competitor.team
-                    ?.displayName ||
-                  '',
-
-                abbreviation:
-                  competitor.team
-                    ?.abbreviation ||
-                  '',
-
-                score:
-                  Number(
-                    competitor.score || 0
-                  )
-              });
-
-            return {
+          const team =
+            x => ({
               id:
                 String(
-                  event.id || ''
+                  x.team?.id || ''
                 ),
 
               name:
-                event.name || '',
-
-              shortName:
-                event.shortName || '',
-
-              date:
-                event.date ||
-                competition.date ||
+                x.team?.displayName ||
+                x.team?.shortDisplayName ||
+                x.team?.name ||
                 '',
 
-              home:
-                team(home),
+              shortName:
+                x.team?.shortDisplayName ||
+                x.team?.displayName ||
+                '',
 
-              away:
-                team(away),
+              abbreviation:
+                x.team?.abbreviation ||
+                '',
 
-              status: {
+              score:
+                Number(
+                  x.score || 0
+                )
+            });
 
-                state:
-                  statusType.state ||
-                  '',
+          return {
+            id:
+              String(
+                event.id || ''
+              ),
 
-                completed:
-                  !!statusType.completed,
+            name:
+              event.name || '',
 
-                detail:
-                  statusType.shortDetail ||
-                  statusType.detail ||
-                  status.displayClock ||
-                  '',
+            shortName:
+              event.shortName || '',
 
-                description:
-                  statusType.description ||
-                  '',
+            date:
+              event.date ||
+              c.date ||
+              '',
 
-                period:
-                  Number(
-                    status.period || 0
-                  ),
+            home:
+              team(home),
 
-                clock:
-                  status.displayClock ||
-                  ''
-              }
-            };
-          });
+            away:
+              team(away),
 
-      res.set(
-        'Cache-Control',
-        'no-store, max-age=0'
-      );
+            status: {
+              state:
+                statusType.state ||
+                '',
 
-      return res.json({
-        ok: true,
-        version: 6,
-        events
+              completed:
+                !!statusType.completed,
+
+              detail:
+                statusType.shortDetail ||
+                statusType.detail ||
+                st.displayClock ||
+                '',
+
+              description:
+                statusType.description ||
+                '',
+
+              period:
+                Number(
+                  st.period || 0
+                ),
+
+              clock:
+                st.displayClock ||
+                ''
+            }
+          };
+        });
+
+    res.set(
+      'Cache-Control',
+      'no-store, max-age=0'
+    );
+
+    return res.json({
+      ok: true,
+      version: 7,
+      events
+    });
+
+  } catch (error) {
+
+    console.error(
+      'NFL scoreboard request failed:',
+      error
+    );
+
+    return res
+      .status(502)
+      .json({
+        error:
+          error.message ||
+          'NFL scoreboard request failed'
       });
+  }
+});
 
-    } catch (error) {
 
-      console.error(
-        'NFL scoreboard request failed:',
-        error
+// ==================================================
+// FANDUEL SHARE MY BET
+//
+// Does not log into your FanDuel account.
+// ==================================================
+
+app.get('/api/fanduel', async (req, res) => {
+
+  try {
+
+    const raw =
+      String(
+        req.query.url || ''
+      ).trim();
+
+    const u =
+      new URL(raw);
+
+    if (
+      u.protocol !== 'https:' ||
+      u.hostname !==
+        'account.sportsbook.fanduel.com' ||
+      !u.pathname.includes(
+        '/sportsbook/addToBetslip'
+      )
+    ) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'Paste an official FanDuel Share My Bet link.'
+        });
+    }
+
+    const shareCode =
+      u.searchParams.get(
+        'shareCode'
       );
 
+    if (
+      !shareCode ||
+      !/^[A-Za-z0-9_-]{4,64}$/
+        .test(shareCode)
+    ) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'FanDuel shareCode missing or invalid.'
+        });
+    }
+
+    const upstream =
+      await fetch(
+        u.toString(),
+        {
+          redirect: 'follow',
+
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 Corvese-Degen-Command-Center/1.7',
+
+            Accept:
+              'text/html,application/xhtml+xml'
+          }
+        }
+      );
+
+    const html =
+      await upstream.text();
+
+    const decoded =
+      html
+        .replace(
+          /&quot;/g,
+          '"'
+        )
+        .replace(
+          /&#34;/g,
+          '"'
+        )
+        .replace(
+          /&amp;/g,
+          '&'
+        );
+
+    const candidates = [];
+
+    const patterns = [
+
+      /<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi,
+
+      /(?:betSlip|betslip|selections|markets|shareBet)\s*[=:]\s*({[\s\S]{20,200000}?})\s*[;,<]/gi
+
+    ];
+
+    for (const re of patterns) {
+
+      let m;
+
+      while (
+        (m = re.exec(decoded)) &&
+        candidates.length < 20
+      ) {
+        candidates.push(
+          m[1]
+        );
+      }
+    }
+
+    let payload = null;
+
+    for (const c of candidates) {
+
+      try {
+
+        const j =
+          JSON.parse(c);
+
+        const txt =
+          JSON.stringify(j);
+
+        if (
+          /selection|market|runner|odds|wager/i
+            .test(txt)
+        ) {
+          payload = j;
+          break;
+        }
+
+      } catch {
+        // Ignore non-JSON candidates.
+      }
+    }
+
+    res.set(
+      'Cache-Control',
+      'no-store'
+    );
+
+    return res.json({
+      ok: true,
+      version: 7,
+      shareCode,
+      url: u.toString(),
+      resolved: !!payload,
+      payload,
+
+      message:
+        payload
+          ? 'FanDuel share payload found.'
+          : 'FanDuel accepted the share link, but did not expose bet selections in the unauthenticated page response.'
+    });
+
+  } catch (e) {
+
+    return res
+      .status(400)
+      .json({
+        error:
+          e.message ||
+          'Could not read FanDuel share link.'
+      });
+  }
+});
+
+
+// ==================================================
+// AI FANDUEL IMAGE RECOGNITION
+//
+// OPENAI_API_KEY remains on Render.
+// It is never sent to the dashboard/browser.
+// ==================================================
+
+app.post('/api/bet/recognize', async (req, res) => {
+
+  try {
+
+    if (!process.env.OPENAI_API_KEY) {
+      return res
+        .status(503)
+        .json({
+          error:
+            'AI recognition is not configured. Add OPENAI_API_KEY on Render.'
+        });
+    }
+
+    const image =
+      String(
+        req.body?.image || ''
+      );
+
+    if (
+      !/^data:image\/(?:png|jpeg|jpg|webp);base64,/i
+        .test(image)
+    ) {
+      return res
+        .status(400)
+        .json({
+          error:
+            'A PNG, JPEG, or WebP image is required.'
+        });
+    }
+
+    if (
+      image.length > 11_000_000
+    ) {
+      return res
+        .status(413)
+        .json({
+          error:
+            'Image is too large. Use a smaller screenshot.'
+        });
+    }
+
+    const schema = {
+      type: 'object',
+      additionalProperties: false,
+
+      properties: {
+
+        type: {
+          type: 'string'
+        },
+
+        overallOdds: {
+          type: 'string'
+        },
+
+        isFuture: {
+          type: 'boolean'
+        },
+
+        startText: {
+          type: 'string'
+        },
+
+        rawText: {
+          type: 'string'
+        },
+
+        confidence: {
+          type: 'number'
+        },
+
+        teams: {
+          type: 'array',
+          items: {
+            type: 'string'
+          }
+        },
+
+        event: {
+          type: 'object',
+          additionalProperties: false,
+
+          properties: {
+            away: {
+              type: 'string'
+            },
+
+            home: {
+              type: 'string'
+            }
+          },
+
+          required: [
+            'away',
+            'home'
+          ]
+        },
+
+        legs: {
+          type: 'array',
+
+          items: {
+            type: 'object',
+            additionalProperties: false,
+
+            properties: {
+              selection: {
+                type: 'string'
+              },
+
+              market: {
+                type: 'string'
+              },
+
+              line: {
+                type: 'string'
+              },
+
+              odds: {
+                type: 'string'
+              },
+
+              team: {
+                type: 'string'
+              },
+
+              player: {
+                type: 'string'
+              }
+            },
+
+            required: [
+              'selection',
+              'market',
+              'line',
+              'odds',
+              'team',
+              'player'
+            ]
+          }
+        }
+      },
+
+      required: [
+        'type',
+        'overallOdds',
+        'isFuture',
+        'startText',
+        'rawText',
+        'confidence',
+        'teams',
+        'event',
+        'legs'
+      ]
+    };
+
+
+    const prompt =
+      `Read this FanDuel bet-share image precisely. ` +
+      `Extract only what is visibly supported. ` +
+      `Preserve American odds signs and decimal prop lines exactly. ` +
+      `Type should be Straight Bet, Parlay, Same Game Parlay, or FanDuel Bet. ` +
+      `For an event use canonical full NFL team names when clear; ` +
+      `if no single event (such as futures), return empty away/home strings. ` +
+      `For each leg, selection is the picked team/player/outcome, ` +
+      `market is the wager market, ` +
+      `line is the numeric/Over/Under line when present, ` +
+      `odds is the leg odds when visible, ` +
+      `team is the canonical NFL team when applicable, ` +
+      `player is the player name when applicable. ` +
+      `For futures set isFuture true. ` +
+      `rawText should be a concise transcription of the useful visible bet text. ` +
+      `confidence is 0 to 1. ` +
+      `Never invent missing stake, payout, teams, players, lines, or odds.`;
+
+
+    const upstream =
+      await fetch(
+        'https://api.openai.com/v1/responses',
+        {
+          method: 'POST',
+
+          headers: {
+            Authorization:
+              `Bearer ${process.env.OPENAI_API_KEY}`,
+
+            'Content-Type':
+              'application/json'
+          },
+
+          body:
+            JSON.stringify({
+              model:
+                process.env.OPENAI_VISION_MODEL ||
+                'gpt-5.6-luna',
+
+              store: false,
+
+              input: [
+                {
+                  role: 'user',
+
+                  content: [
+                    {
+                      type: 'input_text',
+                      text: prompt
+                    },
+
+                    {
+                      type: 'input_image',
+                      image_url: image,
+                      detail: 'high'
+                    }
+                  ]
+                }
+              ],
+
+              text: {
+                format: {
+                  type: 'json_schema',
+                  name: 'fanduel_bet',
+                  strict: true,
+                  schema
+                }
+              }
+            })
+        }
+      );
+
+
+    const data =
+      await upstream.json();
+
+
+    if (!upstream.ok) {
       return res
         .status(502)
         .json({
           error:
-            error.message ||
-            'NFL scoreboard request failed'
+            data?.error?.message ||
+            `OpenAI ${upstream.status}`
         });
     }
-  }
-);
 
 
-// --------------------------------------------------
-// FANDUEL SHARE LINK
-//
-// Does NOT log into your FanDuel account.
-// This only attempts to resolve information FanDuel
-// exposes publicly through a Share My Bet URL.
-// --------------------------------------------------
-
-app.get(
-  '/api/fanduel',
-  async (req, res) => {
-
-    try {
-
-      const raw =
-        String(
-          req.query.url || ''
-        ).trim();
-
-      const u =
-        new URL(raw);
-
-      if (
-        u.protocol !== 'https:' ||
-        u.hostname !==
-          'account.sportsbook.fanduel.com' ||
-        !u.pathname.includes(
-          '/sportsbook/addToBetslip'
+    const outputText =
+      data.output_text ||
+      (data.output || [])
+        .flatMap(
+          x => x.content || []
         )
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              'Paste an official FanDuel Share My Bet link.'
-          });
-      }
+        .find(
+          x => x.type === 'output_text'
+        )
+        ?.text;
 
-      const shareCode =
-        u.searchParams.get(
-          'shareCode'
-        );
 
-      if (
-        !shareCode ||
-        !/^[A-Za-z0-9_-]{4,64}$/
-          .test(shareCode)
-      ) {
-        return res
-          .status(400)
-          .json({
-            error:
-              'FanDuel shareCode missing or invalid.'
-          });
-      }
+    if (!outputText) {
+      return res
+        .status(502)
+        .json({
+          error:
+            'AI returned no readable bet data.'
+        });
+    }
 
-      const upstream =
-        await fetch(
-          u.toString(),
-          {
-            redirect: 'follow',
 
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 Corvese-Degen-Command-Center/1.6',
+    const bet =
+      JSON.parse(outputText);
 
-              Accept:
-                'text/html,application/xhtml+xml'
-            }
-          }
-        );
 
-      const html =
-        await upstream.text();
+    return res.json({
+      ok: true,
+      version: 7,
+      bet
+    });
 
-      const decoded =
-        html
-          .replace(
-            /&quot;/g,
-            '"'
-          )
-          .replace(
-            /&#34;/g,
-            '"'
-          )
-          .replace(
-            /&amp;/g,
-            '&'
-          );
+  } catch (e) {
 
-      const candidates = [];
+    console.error(
+      'AI bet recognition failed:',
+      e
+    );
 
-      const patterns = [
-
-        /<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi,
-
-        /(?:betSlip|betslip|selections|markets|shareBet)\s*[=:]\s*({[\s\S]{20,200000}?})\s*[;,<]/gi
-
-      ];
-
-      for (const re of patterns) {
-
-        let match;
-
-        while (
-          (
-            match =
-              re.exec(decoded)
-          ) &&
-          candidates.length < 20
-        ) {
-          candidates.push(
-            match[1]
-          );
-        }
-      }
-
-      let payload = null;
-
-      for (
-        const candidate
-        of candidates
-      ) {
-
-        try {
-
-          const json =
-            JSON.parse(candidate);
-
-          const text =
-            JSON.stringify(json);
-
-          if (
-            /selection|market|runner|odds|wager/i
-              .test(text)
-          ) {
-            payload = json;
-            break;
-          }
-
-        } catch {
-          // Ignore non-JSON candidates.
-        }
-      }
-
-      res.set(
-        'Cache-Control',
-        'no-store'
-      );
-
-      return res.json({
-
-        ok: true,
-        version: 6,
-
-        shareCode,
-
-        url:
-          u.toString(),
-
-        resolved:
-          !!payload,
-
-        payload,
-
-        message:
-          payload
-            ? 'FanDuel share payload found.'
-            : 'FanDuel accepted the share link, but did not expose bet selections in the unauthenticated page response.'
+    return res
+      .status(500)
+      .json({
+        error:
+          e.message ||
+          'AI bet recognition failed.'
       });
+  }
+});
 
-    } catch (error) {
 
+// ==================================================
+// CROSS-DEVICE BET SYNC
+//
+// iPhone <-> Onn tablet
+// ==================================================
+
+function syncAuthorized(req) {
+
+  const expected =
+    String(
+      process.env.DCC_SYNC_KEY || ''
+    );
+
+  const supplied =
+    String(
+      req.get('x-dcc-sync-key') || ''
+    );
+
+  return (
+    expected &&
+    supplied &&
+    expected === supplied
+  );
+}
+
+
+async function redisCommand(command) {
+
+  const url =
+    String(
+      process.env.UPSTASH_REDIS_REST_URL || ''
+    ).replace(/\/$/, '');
+
+  const token =
+    process.env.UPSTASH_REDIS_REST_TOKEN;
+
+
+  if (
+    !url ||
+    !token
+  ) {
+    throw new Error(
+      'Cloud sync storage is not configured. Add Upstash Redis REST URL and token on Render.'
+    );
+  }
+
+
+  const r =
+    await fetch(
+      url,
+      {
+        method: 'POST',
+
+        headers: {
+          Authorization:
+            `Bearer ${token}`,
+
+          'Content-Type':
+            'application/json'
+        },
+
+        body:
+          JSON.stringify(command)
+      }
+    );
+
+
+  const j =
+    await r.json();
+
+
+  if (
+    !r.ok ||
+    j.error
+  ) {
+    throw new Error(
+      j.error ||
+      `Cloud storage ${r.status}`
+    );
+  }
+
+
+  return j.result;
+}
+
+
+app.get('/api/bets', async (req, res) => {
+
+  if (!syncAuthorized(req)) {
+    return res
+      .status(401)
+      .json({
+        error:
+          'Invalid DCC sync key.'
+      });
+  }
+
+
+  try {
+
+    const raw =
+      await redisCommand([
+        'GET',
+        'dcc:bets'
+      ]);
+
+
+    return res.json({
+      ok: true,
+      version: 7,
+
+      bets:
+        raw
+          ? JSON.parse(raw)
+          : []
+    });
+
+  } catch (e) {
+
+    return res
+      .status(503)
+      .json({
+        error:
+          e.message
+      });
+  }
+});
+
+
+app.put('/api/bets', async (req, res) => {
+
+  if (!syncAuthorized(req)) {
+    return res
+      .status(401)
+      .json({
+        error:
+          'Invalid DCC sync key.'
+      });
+  }
+
+
+  try {
+
+    const bets =
+      Array.isArray(req.body?.bets)
+        ? req.body.bets
+        : [];
+
+
+    if (
+      bets.length > 500
+    ) {
       return res
         .status(400)
         .json({
           error:
-            error.message ||
-            'Could not read FanDuel share link.'
+            'Too many bets.'
         });
     }
+
+
+    const raw =
+      JSON.stringify(bets);
+
+
+    if (
+      raw.length > 2_000_000
+    ) {
+      return res
+        .status(413)
+        .json({
+          error:
+            'Bet data too large.'
+        });
+    }
+
+
+    await redisCommand([
+      'SET',
+      'dcc:bets',
+      raw
+    ]);
+
+
+    return res.json({
+      ok: true,
+      version: 7,
+      count: bets.length
+    });
+
+  } catch (e) {
+
+    return res
+      .status(503)
+      .json({
+        error:
+          e.message
+      });
   }
-);
+});
 
 
-// --------------------------------------------------
+// ==================================================
 // START SERVER
-// --------------------------------------------------
+// ==================================================
 
 app.listen(
   PORT,
   '0.0.0.0',
   () => {
     console.log(
-      `Corvese DCC proxy v6 listening on port ${PORT}`
+      `Corvese DCC proxy v7 listening on port ${PORT}`
     );
   }
 );
